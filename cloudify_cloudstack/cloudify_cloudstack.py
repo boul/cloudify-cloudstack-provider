@@ -574,11 +574,11 @@ class CloudstackKeypairCreator(object):
     def delete_keypairs(self):
         mgmt_keypair_name = self.get_management_keypair_name()
         lgr.info('deleting management keypair {0}'.format(mgmt_keypair_name))
-        self.cloud_driver.ex_delete_keypair(mgmt_keypair_name)
+        self.cloud_driver.delete_key_pair(mgmt_keypair_name)
 
         agent_keypair_name = self._get_agents_keypair_name()
         lgr.info('deleting agents keypair {0}'.format(agent_keypair_name))
-        self.cloud_driver.delete_keypair(agent_keypair_name)
+        self.cloud_driver.delete_key_pair(agent_keypair_name)
 
     def get_management_keypair_name(self):
         keypair_config = self.provider_config['compute']['management_server'][
