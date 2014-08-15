@@ -220,7 +220,7 @@ class ProviderManager(BaseProviderClass):
                                                      nets)
 
             node = compute_creator.create_node()
-            
+
 
             # Getting network config for portmaps, in advanced zones portmaps are
             # mapped to a node so we need to create portmaps after node creation
@@ -255,6 +255,7 @@ class ProviderManager(BaseProviderClass):
             'cloudstack -> zone_type must be either basic or advanced')
 
         provider_context = {"ip": str(mgmt_ip)}
+        provider_context = {"mgmt_node_id": str(node.id)}
 
         print('management ip: ' + mgmt_ip + ' key name: ' + self.
               _get_private_key_path_from_keypair_config(
@@ -298,8 +299,8 @@ class ProviderManager(BaseProviderClass):
         conflicts during teardown
         :rtype: 'None'
         """
-        management_ip = provider_context['ip']
-        lgr.info('tearing-down management vm {0}.'.format(management_ip))
+        management_id = provider_context['mgmt_node_id']
+        lgr.info('tearing-down management vm {0}.'.format(management_id))
 
         # lgr.debug('reading configuration file {0}'.format(config_path))
         # provider_config = _read_config(config_path)
@@ -327,7 +328,7 @@ class ProviderManager(BaseProviderClass):
                                                         security_group_creator,
                                                         keypair_creator,
                                                         compute_creator,
-                                                        management_ip)
+                                                        management_id)
 
             lgr.debug('terminating management vm and all of its resources.')
             resource_terminator.terminate_resources()
@@ -351,7 +352,7 @@ class ProviderManager(BaseProviderClass):
                                                              network_creator,
                                                              keypair_creator,
                                                              compute_creator,
-                                                             management_ip)
+                                                             management_id)
 
             lgr.debug('terminating management vm and all of its resources.')
             resource_terminator.terminate_resources()
@@ -523,15 +524,15 @@ class CloudstackNetworkResourceTerminator(object):
                  network_creator,
                  key_pair_creator,
                  compute_creator,
-                 mgmt_ip):
+                 mgmt_id):
         self.network_creator = network_creator
         self.key_pair_creator = key_pair_creator
         self.compute_creator = compute_creator
-        self.mgmt_ip = mgmt_ip
+        self.mgmt_id = mgmt_id
 
     def terminate_resources(self):
-        lgr.info('terminating management vm {0}'.format(self.mgmt_ip))
-        self.compute_creator.delete_node(self.mgmt_ip)
+        lgr.info('terminating management vm {0}'.format(self.mgmt_id))
+        self.compute_creator.delete_node(self.mgmt_id)
 
         lgr.info('deleting agent and management keypairs')
         self.key_pair_creator.delete_keypairs()
@@ -577,7 +578,7 @@ class CloudstackKeypairCreator(object):
 
         agent_keypair_name = self._get_agents_keypair_name()
         lgr.info('deleting agents keypair {0}'.format(agent_keypair_name))
-        self.cloud_driver.ex_delete_keypair(agent_keypair_name)
+        self.cloud_driver.delete_keypair(agent_keypair_name)
 
     def get_management_keypair_name(self):
         keypair_config = self.provider_config['compute']['management_server'][
@@ -1059,10 +1060,11 @@ class CloudstackNetworkComputeCreator(object):
         self.network_names = network_name
         self.node_name = node_name
 
-    def delete_node(self, node_ip):
-        lgr.debug('getting node for if {0}'.format(node_ip))
+    def delete_node(self, node_id):
+        lgr.debug('getting node for if {0}'.format(node_id))
+
         node = [node for node in self.cloud_driver.list_nodes() if
-                node_ip in node.public_ips][0]
+                node_id == node.id][0]
 
         lgr.debug('destroying node {0}'.format(node))
         self.cloud_driver.destroy_node(node)
