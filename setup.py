@@ -17,20 +17,14 @@ __author__ = 'adaml'
 
 from setuptools import setup
 
-VERSION = '1.0'
-
-COSMO_CLI_VERSION = '3.0'
-COSMO_CLI_BRANCH = 'develop'
-COSMO_CLI = 'https://github.com/cloudify-cosmo/cloudify-cli/tarball/' \
-            '{0}#egg=cloudify-cli-{1}'.format(
-    COSMO_CLI_BRANCH, COSMO_CLI_VERSION)
+VERSION = '1.1'
 
 setup(
     name='cloudify-cloudstack-provider',
     version=VERSION,
     author='adaml',
     author_email='adaml@gigaspaces.com',
-    packages=['cloudify_exoscale','cloudify_cloudstack'],
+    packages=['cloudify_exoscale', 'cloudify_cloudstack'],
     license='LICENSE',
     description='the cloudify cloudstack provider',
     package_data={'cloudify_exoscale': ['cloudify-config.yaml',
@@ -44,7 +38,6 @@ setup(
         "IPy",
         "PyYAML",
         "apache-libcloud>=0.15.1",
-        "cloudify-cli"
+        'cloudify'
     ],
-    dependency_links=[COSMO_CLI]
 )
