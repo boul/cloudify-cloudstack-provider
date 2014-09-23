@@ -237,6 +237,7 @@ class ProviderManager(BaseProviderClass):
 
                 mgmt_ports = management_network_config['ports']
                 public_ip = network_creator.get_mgmt_pub_ip()
+                mgmt_network_id = network_creator.get_mgmt_network_id()
 
                 lgr.debug('Creating port forwarding rules')
 
@@ -257,6 +258,14 @@ class ProviderManager(BaseProviderClass):
                                                              protocol,
                                                              port,
                                                              port)
+
+                # Take care of egress firewall rules
+                network_creator.create_egress_firewall_rule(
+                    mgmt_network_id,
+                    cidr,
+                    protocol,
+                    port,
+                    port)
 
             # Set Management IP to either private or Public
             if mgmt_server_config['use_private_ip'] == True:
@@ -847,6 +856,16 @@ class CloudstackNetworkCreator(object):
             start_port=start_port,
             end_port=end_port)
 
+    def create_egress_firewall_rule(self, network_id, cidr_list, protocol,
+                                    start_port, end_port):
+
+        self.cloud_driver.ex_create_egress_firewall_rule(
+            network_id=network_id,
+            cidr_list=cidr_list,
+            protocol=protocol,
+            start_port=start_port,
+            end_port=end_port)
+
     def get_network(self, network_name):
         networks = [netw for netw in self.cloud_driver
                     .ex_list_networks() if netw.name == network_name]
@@ -920,6 +939,22 @@ class CloudstackNetworkCreator(object):
                 return public_ip
         else:
             raise RuntimeError('No matching mgmt public ip found')
+
+    def get_mgmt_network_id(self):
+        mgmt_net = self.provider_config['networking'][
+            'management_network']['name']
+
+        nets = self.get_networks()
+
+        for net in nets:
+
+            if net.name == mgmt_net:
+                lgr.debug('Management Network {0} found!'.format(net.name))
+                break
+        else:
+            raise RuntimeError('Management network {0} not found'.format(mgmt_net))
+
+        return net.id
 
     def get_agent_pub_ip(self):
         agent_pub_ip = self.provider_config['networking'][
