@@ -230,28 +230,29 @@ class ProviderManager(BaseProviderClass):
 
             management_network_config = self.provider_config['networking'][
                 'management_network']
-            #management_network_name = management_network_config['name']
 
             # If we need to use an existing network we do not config portfwd
-            if not management_network_config['use_existing'] == True:
+            if not management_network_config['use_existing']:
 
-                mgmt_ports = management_network_config['ports']
+                mgmt_ingr_firewall_config = management_network_config['firewall']['ingress']
+                mgmt_egr_firewall_config = management_network_config['firewall']['egress']
+
                 public_ip = network_creator.get_mgmt_pub_ip()
                 mgmt_network_id = network_creator.get_mgmt_network_id()
 
                 lgr.debug('Creating port forwarding rules')
 
                 #for each port, add forward rule
-                for port in mgmt_ports:
-                        protocol = management_network_config.get('protocol', None)
-                        cidr = management_network_config.get('cidr', None)
+                ingr_ports = mgmt_ingr_firewall_config['ports']
+                for port in ingr_ports:
+                        protocol = mgmt_ingr_firewall_config.get('protocol', None)
+                        cidr = mgmt_ingr_firewall_config.get('cidr', None)
 
                         network_creator.add_port_fwd_rule(public_ip,
                                                           port,
                                                           port,
                                                           protocol,
                                                           node)
-                        lgr.info('Creating firewall rules')
 
                         network_creator.create_firewall_rule(public_ip,
                                                              cidr,
@@ -260,15 +261,20 @@ class ProviderManager(BaseProviderClass):
                                                              port)
 
                 # Take care of egress firewall rules
-                network_creator.create_egress_firewall_rule(
-                    mgmt_network_id,
-                    cidr,
-                    protocol,
-                    port,
-                    port)
+                egr_protocol = mgmt_egr_firewall_config.get('protocol', None)
+                egr_cidr = mgmt_egr_firewall_config.get('cidr', None)
+
+                egr_ports = mgmt_egr_firewall_config['ports']
+                for port in egr_ports:
+                    network_creator.create_egress_firewall_rule(
+                        mgmt_network_id,
+                        egr_cidr,
+                        egr_protocol,
+                        port,
+                        port)
 
             # Set Management IP to either private or Public
-            if mgmt_server_config['use_private_ip'] == True:
+            if mgmt_server_config['use_private_ip']:
                 public_ip = node
                 mgmt_ip = node.private_ips[0]
             else:
@@ -784,6 +790,7 @@ class CloudstackSecurityGroupCreator(object):
             lgr.info('creating management security group: {0}'
                 .format(management_sg_name))
             self.cloud_driver.ex_create_security_group(management_sg_name)
+
 
             mgmt_ports = management_sg_config['ports']
             #for each port, add rule
