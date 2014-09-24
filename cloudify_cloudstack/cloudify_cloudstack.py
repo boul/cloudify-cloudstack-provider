@@ -853,9 +853,6 @@ class CloudstackNetworkCreator(object):
     def create_firewall_rule(self, ip_address, cidr_list, protocol,
                              start_port, end_port):
 
-        lgr.debug('creating firewall rule for {0} with details {1}'.format(ip_address, locals().values()))
-        lgr.info('creating firewall rule for {0} with details {1}'.format(ip_address, locals().values()))
-
         self.cloud_driver.ex_create_firewall_rule(
             address=ip_address,
             cidr_list=cidr_list,
