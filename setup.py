@@ -31,11 +31,15 @@ setup(
                                         'cloudify-config.defaults.yaml'],
                   'cloudify_cloudstack':['cloudify-config.yaml',
                                         'cloudify-config.defaults.yaml']},
+    dependency_links=[
+        'https://github.com/boul/libcloud/archive/cloudstackvpc.zip#egg=apache-libcloud'
+    ],
     install_requires=[
         "scp",
-        "jsonschema",
+        "jsonschema==2.3.0",
+        "paramiko==1.12",
         "IPy==0.81",
-        "apache-libcloud>=0.15.1",
+        "apache-libcloud",
         'cloudify==3.0'
-    ],
+    ]
 )
