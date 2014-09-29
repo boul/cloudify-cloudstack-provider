@@ -143,10 +143,7 @@ class ProviderManager(BaseProviderClass):
         resources to be used during teardown)
         """
         lgr.info('bootstrapping to Cloudstack provider.')
-
         lgr.debug('reading configuration file')
-        # provider_config = _read_config(None)
-        zone_type = self.provider_config['cloudstack']['zone_type']
 
         zone_type = self.provider_config['cloudstack']['zone_type']
 
@@ -281,9 +278,132 @@ class ProviderManager(BaseProviderClass):
                 public_ip = network_creator.get_mgmt_pub_ip()
                 mgmt_ip = public_ip.address
 
+        if zone_type == 'vpc':
+            lgr.debug('Using the VPC zone type')
+
+            network_creator = CloudstackNetworkCreator(cloud_driver,
+                                                       self.provider_config)
+
+            #create required node topology
+            lgr.debug('creating the required resources for management vm')
+
+            vpc = network_creator.create_vpcs()
+
+            net = network_creator.create_networks(vpc.id)
+            keypair_creator.create_key_pairs()
+
+            keypair_name = keypair_creator.get_management_keypair_name()
+            netw_name = network_creator.get_mgmt_network_name()
+            lgr.debug(' network name {0}'.format(netw_name))
+            netw = network_creator.get_network(netw_name)
+            lgr.debug(' network id {0}'.format(netw[0].id))
+
+            lgr.debug('reading server configuration.')
+            mgmt_server_config = self.\
+                provider_config.get('compute', {}) \
+                .get('management_server', {})
+
+            nets = netw
+
+            # init compute node creator
+            compute_creator = CloudstackNetworkComputeCreator(
+                cloud_driver,
+                self.provider_config,
+                keypair_name,
+                nets)
+
+            lgr.info('Creating management node')
+            node = compute_creator.create_node()
+
+            # Getting network config for portmaps, in advanced zones portmaps
+            # are mapped to a node so we need to create portmaps
+            # after node creation
+            lgr.debug('reading management network configuration.')
+
+            management_network_config = self.provider_config['networking'][
+                'management_network']
+
+            if not management_network_config['use_existing']:
+
+                mgmt_ingr_firewall_config = \
+                    management_network_config['firewall']['ingress']
+                mgmt_egr_firewall_config = \
+                    management_network_config['firewall']['egress']
+
+                # Since this is a VPC, we need to create a ACL and ACL rules
+                acl_list = network_creator.create_acl_list(
+                    vpc.name, vpc.id, net.id)
+
+                # Creat ingress ACL rules in ACLlist
+                acl_ingress_ports = mgmt_ingr_firewall_config['ports']
+                acl_ingress_protocol = mgmt_ingr_firewall_config['protocol']
+                acl_ingress_cidr = mgmt_ingr_firewall_config['cidr']
+
+                for port in acl_ingress_ports:
+                    network_creator.create_acl(
+                        acl_ingress_protocol, acl_list.id,
+                        acl_ingress_cidr, port, port, "ingress")
+
+                 # Creat egress ACL rules in ACLlist
+                acl_egress_ports = mgmt_egr_firewall_config['ports']
+                acl_egress_protocol = mgmt_egr_firewall_config['protocol']
+                acl_egress_cidr = mgmt_egr_firewall_config['cidr']
+
+                for port in acl_egress_ports:
+                    network_creator.create_acl(
+                        acl_egress_protocol, acl_list.id,
+                        acl_egress_cidr, port, port, "egress")
+
+                # Since were working with a VPC, we need to aquire a public IP
+                lgr.info('Aquire a public IP for VPC')
+                public_ip = cloud_driver.ex_allocate_public_ip(vpc_id=vpc.id)
+
+                lgr.info('Public IP aquired for VPC: {0}'.format(
+                    public_ip.address))
+
+                lgr.debug('Creating port forwarding rules')
+
+                #for each port, add forward rule
+                ingr_ports = mgmt_ingr_firewall_config['ports']
+                for port in ingr_ports:
+                        protocol = mgmt_ingr_firewall_config.get('protocol', None)
+                        cidr = mgmt_ingr_firewall_config.get('cidr', None)
+
+                        network_creator.add_port_fwd_rule(public_ip,
+                                                          port,
+                                                          port,
+                                                          protocol,
+                                                          node,
+                                                          net.id)
+
+                        # network_creator.create_firewall_rule(public_ip,
+                        #                                      cidr,
+                        #                                      protocol,
+                        #                                      port,
+                        #                                      port)
+
+                # Take care of egress firewall rules
+                # egr_protocol = mgmt_egr_firewall_config.get('protocol', None)
+                # egr_cidr = mgmt_egr_firewall_config.get('cidr', None)
+                #
+                # egr_ports = mgmt_egr_firewall_config['ports']
+                # for port in egr_ports:
+                #     network_creator.create_egress_firewall_rule(
+                #         mgmt_network_id,
+                #         egr_cidr,
+                #         egr_protocol,
+                #         port,
+                #         port)
+
+            # Set Management IP to either private or Public
+            if mgmt_server_config['use_private_ip']:
+                mgmt_ip = node.private_ips[0]
+            else:
+                mgmt_ip = public_ip.address
         else:
             lgr.debug(
-            'cloudstack -> zone_type must be either basic or advanced')
+                'cloudstack -> zone_type must be either basic, '
+                'advanced or vpc')
 
         provider_context = {"ip": str(mgmt_ip)}
         provider_context['mgmt_node_id'] = str(node.id)
@@ -300,12 +420,11 @@ class ProviderManager(BaseProviderClass):
                 mgmt_server_config['management_keypair']),
             mgmt_server_config.get('user_on_management'))
 
-        return mgmt_ip, \
-               mgmt_ip, \
-               self._get_private_key_path_from_keypair_config(
-                   mgmt_server_config['management_keypair']), \
-               mgmt_server_config.get('user_on_management'), \
-                   provider_context
+        return mgmt_ip, mgmt_ip, \
+            self._get_private_key_path_from_keypair_config(
+                mgmt_server_config['management_keypair']), \
+            mgmt_server_config.get('user_on_management'), \
+            provider_context
 
     def validate(self, validation_errors={}):
         """
@@ -452,80 +571,6 @@ def _read_config(config_file_path):
     merged_config = _deep_merge_dictionaries(user_config, defaults_config) \
         if user_config else defaults_config
     return merged_config
-
-
-# def bootstrap(config_path=None, is_verbose_output=False,
-#               bootstrap_using_script=True, keep_up=False,
-#               dev_mode=False):
-#     lgr.info('bootstrapping to Cloudstack provider.')
-#     _set_global_verbosity_level(is_verbose_output)
-#
-#     lgr.debug('reading configuration file {0}'.format(config_path))
-#     provider_config = _read_config(config_path)
-#
-#     #init keypair and security-group resource creators.
-#     cloud_driver = CloudstackConnector(provider_config).create()
-#     keypair_creator = CloudstackKeypairCreator(cloud_driver, provider_config)
-#     security_group_creator = CloudstackSecurityGroupCreator(cloud_driver,
-#                                                           provider_config)
-#     #create required node topology
-#     lgr.debug('creating the required resources for management vm')
-#     security_group_creator.create_security_groups()
-#     keypair_creator.create_key_pairs()
-#
-#     keypair_name = keypair_creator.get_management_keypair_name()
-#     security_group_name = security_group_creator.
-#                    get_mgmt_security_group_name()
-#
-#     # init compute node creator
-#     compute_creator = CloudstackComputeCreator(cloud_driver,
-#                                              provider_config,
-#                                              keypair_name,
-#                                              security_group_name)
-#
-#     #spinning-up a new instance using the above topology.
-#     #Cloudstack provider supports only public ip allocation.
-#     #see cloudstack 'basic zone'
-#     public_ip = compute_creator.create_node()
-#     cosmo_bootstrapper = CosmoOnCloudstackBootstrapper(provider_config,
-#                                                      public_ip,
-#                                                      public_ip,
-#                                                      bootstrap_using_script,
-#                                                      dev_mode)
-#     #bootstrap to cloud.
-#     cosmo_bootstrapper.do(keep_up)
-#     return public_ip
-
-
-#TODO: no config_path named property on openstack. why?
-# def teardown(management_ip,
-#              is_verbose_output=False,
-#              config_path=None):
-#     lgr.info('tearing-down management vm {0}.'.format(management_ip))
-#
-#     lgr.debug('reading configuration file {0}'.format(config_path))
-#     provider_config = _read_config(config_path)
-#
-#     #init keypair and security-group resource creators.
-#     cloud_driver = CloudstackConnector(provider_config).create()
-#     keypair_creator = CloudstackKeypairCreator(cloud_driver, provider_config)
-#     security_group_creator = CloudstackSecurityGroupCreator(cloud_driver,
-#                                                           provider_config)
-#     # init compute node creator
-#     compute_creator = CloudstackComputeCreator(cloud_driver,
-#                                              provider_config,
-#                                              keypair_name=None,
-#                                              security_group_name=None,
-#                                              node_name=None)
-#
-#     resource_terminator = CloudstackResourceTerminator(
-#                                            security_group_creator,
-#                                                      keypair_creator,
-#                                                      compute_creator,
-#                                                      management_ip)
-#
-#     lgr.debug('terminating management vm and all of its resources.')
-#     resource_terminator.terminate_resources()
 
 
 class CloudstackSecurityGroupResourceTerminator(object):
@@ -839,16 +884,19 @@ class CloudstackNetworkCreator(object):
         self.provider_config = provider_config
 
     def add_port_fwd_rule(self, ip_address, privateport,
-                          publicport, protocol, node=None):
+                          publicport, protocol, node=None, network_id=None):
 
-        lgr.debug('creating network rule for {0} with details {1}'.format(ip_address, locals().values()))
+        lgr.debug('creating network rule for {0} with details {1}'.
+                  format(ip_address, locals().values()))
+
         self.cloud_driver.ex_create_port_forwarding_rule(
             address=ip_address,
             private_port=privateport,
             public_port=publicport,
             node=node,
             protocol=protocol,
-            openfirewall=False)
+            openfirewall=False,
+            network_id=network_id)
 
     def create_firewall_rule(self, ip_address, cidr_list, protocol,
                              start_port, end_port):
@@ -976,18 +1024,46 @@ class CloudstackNetworkCreator(object):
             return False
         return True
 
-    def create_networks(self):
+    def _vpc_exists(self, vpc_name):
+        vpcs = [vpc for vpc in self.cloud_driver.
+                ex_list_vpcs() if vpc.name == vpc_name]
+
+        if vpcs.__len__() == 0:
+            return None
+        return vpcs[0]
+
+    def create_acl_list(self, name, vpc_id, network_id):
+        acllist = self.cloud_driver.ex_create_network_acllist(
+            name=name,
+            vpc_id=vpc_id,
+            description=name)
+
+        # Replace the newly created ACL list on to the network
+        self.cloud_driver.ex_replace_network_acllist(
+            acl_id=acllist.id,
+            network_id=network_id)
+
+        return acllist
+
+    def create_acl(self, protocol, acl_id,
+                   cidr_list, start_port, end_port, traffic_type):
+        acl = self.cloud_driver.ex_create_network_acl(
+            protocol=protocol,
+            acl_id=acl_id,
+            cidr_list=cidr_list,
+            start_port=start_port,
+            end_port=end_port,
+            traffic_type=traffic_type)
+        return acl
+
+    def create_networks(self, vpc=None):
 
         lgr.debug('reading management network configuration.')
         management_netw_config = self.provider_config['networking'][
             'management_network']
-        # agent_netw_config = self.provider_config['networking'][
-        #     'agents_network']
+
         management_netw_name = management_netw_config['name']
         use_existing = management_netw_config['use_existing']
-
-        # agent_netw_name = agent_netw_config['name']
-        # agent_use_existing = agent_netw_config['use_existing']
 
         if not self._is_netw_exists(management_netw_name):
             if not use_existing == False:
@@ -1017,43 +1093,48 @@ class CloudstackNetworkCreator(object):
                 for offering in offerings:
                     if net_offering == offering.name:
                         break
-                    else:
-                        raise RuntimeError('Specified network offering '
-                                           'cannot be found!')
 
-                self.cloud_driver.ex_create_network(management_netw_name,
-                                                    management_netw_name,
-                                                    offering,
-                                                    location,
-                                                    gateway,
-                                                    netmask,
-                                                    domain)
+                net = self.cloud_driver.ex_create_network(
+                    management_netw_name,
+                    management_netw_name,
+                    offering,
+                    location,
+                    gateway,
+                    netmask,
+                    domain,
+                    vpc_id=vpc)
+
+                return net
         else:
             lgr.info('using existing management network {0}'.format(
                 management_netw_name))
-"""
-        lgr.debug('reading agent network configuration.')
-        agent_netw_config = self.provider_config['networking'][
-            'agents_network']
-        agent_netw_name = agent_netw_config['name']
+            return self._is_netw_exists(management_netw_name)
 
-        if not self._is_netw_exists(agent_netw_name):
-            if not agent_use_existing == False:
-                raise RuntimeError('No existing agent network and'
-                                   'use_existing set to true')
+    def create_vpcs(self):
 
-            if not agent_use_existing == True:
-                lgr.info('Creating agent network {0} since use_existing'
-                         'is false and network does not exist'
-                         .format(agent_netw_name))
+        lgr.debug('reading management network configuration.')
+        management_netw_config = self.provider_config['networking'][
+            'management_network']
 
-                netmask = agent_netw_config['network_mask']
-                gateway = agent_netw_config['network_gateway']
-                net_offering = agent_netw_config['network_offering']
-                domain = agent_netw_config['network_domain']
-                zone = agent_netw_config['network_zone']
+        management_netw_name = management_netw_config['name']
+        use_existing = management_netw_config['use_existing']
+
+        if not self._vpc_exists(management_netw_name):
+            if not use_existing == False:
+                raise RuntimeError('No existing network and use_existing '
+                                   'set to true')
+
+            if not use_existing == True:
+                lgr.info('Creating network {0} since use_existing is false '
+                         'and network does not exist'
+                         .format(management_netw_name))
+
+                net_offering = management_netw_config['vpc_offering']
+                domain = management_netw_config['network_domain']
+                zone = management_netw_config['network_zone']
+                cidr = management_netw_config['network_cidr']
                 locations = self.cloud_driver.list_locations()
-                offerings = self.cloud_driver.ex_list_network_offerings()
+                offerings = self.cloud_driver.ex_list_vpc_offerings()
 
                 for location in locations:
                     if zone == location.name:
@@ -1065,22 +1146,20 @@ class CloudstackNetworkCreator(object):
                 for offering in offerings:
                     if net_offering == offering.name:
                         break
-                    else:
-                        raise RuntimeError('Specified network offering '
-                                           'cannot be found!')
 
-                self.cloud_driver.ex_create_network(agent_netw_name,
-                                                    agent_netw_name,
-                                                    offering,
-                                                    location,
-                                                    gateway,
-                                                    netmask,
-                                                    domain)
+                vpc = self.cloud_driver.ex_create_vpc(
+                    cidr=cidr,
+                    name=management_netw_name,
+                    display_text=management_netw_name,
+                    vpc_offering=offering,
+                    zone_id=location.id,
+                    network_domain=domain)
 
+            return vpc
         else:
-            lgr.info(
-                'using existing agent network {0}'.format(agent_netw_name))
-"""
+            lgr.info('using existing management network {0}'.format(
+                management_netw_name))
+            return self._vpc_exists(management_netw_name)
 
 
 class CloudstackSecurityGroupComputeCreator(object):
