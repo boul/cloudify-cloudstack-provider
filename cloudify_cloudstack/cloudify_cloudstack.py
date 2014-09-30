@@ -149,6 +149,8 @@ class ProviderManager(BaseProviderClass):
         # provider_config = _read_config(None)
         zone_type = self.provider_config['cloudstack']['zone_type']
 
+        zone_type = self.provider_config['cloudstack']['zone_type']
+
         #init keypair and security-group resource creators.
         cloud_driver = CloudstackConnector(self.provider_config).create()
         keypair_creator = CloudstackKeypairCreator(
@@ -157,7 +159,7 @@ class ProviderManager(BaseProviderClass):
         if zone_type == 'basic':
 
             security_group_creator = CloudstackSecurityGroupCreator(
-                    cloud_driver, self.provider_config)
+                cloud_driver, self.provider_config)
 
             #create required node topology
             lgr.debug('creating the required resources for management vm')
@@ -169,14 +171,14 @@ class ProviderManager(BaseProviderClass):
 
             lgr.debug('reading server configuration.')
             mgmt_server_config = self.provider_config.get('compute', {}) \
-            .get('management_server', {})
+                                                     .get('management_server', {})
 
             # init compute node creator
             compute_creator = CloudstackSecurityGroupComputeCreator(
-                                                    cloud_driver,
-                                                     self.provider_config,
-                                                     keypair_name,
-                                                     sg_name)
+                cloud_driver,
+                self.provider_config,
+                keypair_name,
+                sg_name)
 
             #spinning-up a new instance using the above topology.
             #Cloudstack provider supports only public ip allocation.
@@ -188,8 +190,8 @@ class ProviderManager(BaseProviderClass):
 
             lgr.debug('Using the advanced zone path')
 
-            network_creator = CloudstackNetworkCreator(
-                cloud_driver, self.provider_config)
+            network_creator = CloudstackNetworkCreator(cloud_driver,
+                                                       self.provider_config)
 
             #create required node topology
             lgr.debug('creating the required resources for management vm')
@@ -210,15 +212,15 @@ class ProviderManager(BaseProviderClass):
 
             lgr.debug('reading server configuration.')
             mgmt_server_config = self.provider_config.get('compute', {}) \
-            .get('management_server', {})
+                                                     .get('management_server', {})
 
             nets = netw
 
             # init compute node creator
             compute_creator = CloudstackNetworkComputeCreator(cloud_driver,
-                                                     self.provider_config,
-                                                     keypair_name,
-                                                     nets)
+                                                              self.provider_config,
+                                                              keypair_name,
+                                                              nets)
 
             node = compute_creator.create_node()
 
@@ -226,28 +228,54 @@ class ProviderManager(BaseProviderClass):
             # are mapped to a node so we need to create portmaps
             # after node creation
             lgr.debug('reading management network configuration.')
+
             management_network_config = self.provider_config['networking'][
                 'management_network']
-            #management_network_name = management_network_config['name']
 
             # If we need to use an existing network we do not config portfwd
-            if not management_network_config['use_existing'] == True:
+            if not management_network_config['use_existing']:
 
-                mgmt_ports = management_network_config['ports']
+                mgmt_ingr_firewall_config = management_network_config['firewall']['ingress']
+                mgmt_egr_firewall_config = management_network_config['firewall']['egress']
+
                 public_ip = network_creator.get_mgmt_pub_ip()
+                mgmt_network_id = network_creator.get_mgmt_network_id()
+
+                lgr.debug('Creating port forwarding rules')
 
                 #for each port, add forward rule
-                for port in mgmt_ports:
-                        #cidr = management_sg_config.get('cidr', None)
-                        protocol = management_network_config.get('protocol',
-                                                                None)
+                ingr_ports = mgmt_ingr_firewall_config['ports']
+                for port in ingr_ports:
+                        protocol = mgmt_ingr_firewall_config.get('protocol', None)
+                        cidr = mgmt_ingr_firewall_config.get('cidr', None)
+
                         network_creator.add_port_fwd_rule(public_ip,
                                                           port,
                                                           port,
                                                           protocol,
                                                           node)
+
+                        network_creator.create_firewall_rule(public_ip,
+                                                             cidr,
+                                                             protocol,
+                                                             port,
+                                                             port)
+
+                # Take care of egress firewall rules
+                egr_protocol = mgmt_egr_firewall_config.get('protocol', None)
+                egr_cidr = mgmt_egr_firewall_config.get('cidr', None)
+
+                egr_ports = mgmt_egr_firewall_config['ports']
+                for port in egr_ports:
+                    network_creator.create_egress_firewall_rule(
+                        mgmt_network_id,
+                        egr_cidr,
+                        egr_protocol,
+                        port,
+                        port)
+
             # Set Management IP to either private or Public
-            if mgmt_server_config['use_private_ip'] == True:
+            if mgmt_server_config['use_private_ip']:
                 public_ip = node
                 mgmt_ip = node.private_ips[0]
             else:
@@ -764,6 +792,7 @@ class CloudstackSecurityGroupCreator(object):
                 .format(management_sg_name))
             self.cloud_driver.ex_create_security_group(management_sg_name)
 
+
             mgmt_ports = management_sg_config['ports']
             #for each port, add rule
             for port in mgmt_ports:
@@ -811,21 +840,40 @@ class CloudstackNetworkCreator(object):
         self.provider_config = provider_config
 
     def add_port_fwd_rule(self, ip_address, privateport,
-                  publicport, protocol, node=None):
+                          publicport, protocol, node=None):
 
-        lgr.debug('creating network rule for {0} with details {1}'
-                           .format(ip_address, locals().values()))
+        lgr.debug('creating network rule for {0} with details {1}'.format(ip_address, locals().values()))
         self.cloud_driver.ex_create_port_forwarding_rule(
-                                            address=ip_address,
-                                            private_port=privateport,
-                                            public_port=publicport,
-                                            node=node,
-                                            protocol=protocol,
-                                            openfirewall=False)
+            address=ip_address,
+            private_port=privateport,
+            public_port=publicport,
+            node=node,
+            protocol=protocol,
+            openfirewall=False)
+
+    def create_firewall_rule(self, ip_address, cidr_list, protocol,
+                             start_port, end_port):
+
+        self.cloud_driver.ex_create_firewall_rule(
+            address=ip_address,
+            cidr_list=cidr_list,
+            protocol=protocol,
+            start_port=start_port,
+            end_port=end_port)
+
+    def create_egress_firewall_rule(self, network_id, cidr_list, protocol,
+                                    start_port, end_port):
+
+        self.cloud_driver.ex_create_egress_firewall_rule(
+            network_id=network_id,
+            cidr_list=cidr_list,
+            protocol=protocol,
+            start_port=start_port,
+            end_port=end_port)
 
     def get_network(self, network_name):
         networks = [netw for netw in self.cloud_driver
-            .ex_list_networks() if netw.name == network_name]
+                    .ex_list_networks() if netw.name == network_name]
 
         if networks.__len__() == 0:
             return None
@@ -883,8 +931,7 @@ class CloudstackNetworkCreator(object):
                 lgr.debug('Management Network {0} found!'.format(net.name))
                 break
         else:
-            raise RuntimeError('Management network {0} not found'.
-                                   format(mgmt_net))
+            raise RuntimeError('Management network {0} not found'.format(mgmt_net))
 
         publicips = self.cloud_driver.ex_list_public_ips()
 
@@ -897,6 +944,22 @@ class CloudstackNetworkCreator(object):
                 return public_ip
         else:
             raise RuntimeError('No matching mgmt public ip found')
+
+    def get_mgmt_network_id(self):
+        mgmt_net = self.provider_config['networking'][
+            'management_network']['name']
+
+        nets = self.get_networks()
+
+        for net in nets:
+
+            if net.name == mgmt_net:
+                lgr.debug('Management Network {0} found!'.format(net.name))
+                break
+        else:
+            raise RuntimeError('Management network {0} not found'.format(mgmt_net))
+
+        return net.id
 
     def get_agent_pub_ip(self):
         agent_pub_ip = self.provider_config['networking'][
