@@ -33,17 +33,18 @@ import libcloud.security
 # provides a logger to be used throughout the provider code
 # returns a tuple of a main (file+console logger) and a file
 # (file only) logger.
-from cosmo_cli.cosmo_cli import init_logger
+from cloudify_cli.logger import lgr
+# provides a way to set the global verbosity level
 # from cosmo_cli.cosmo_cli import set_global_verbosity_level
 # provides 2 base methods to be used.
 # if not imported, the bootstrap method must be implemented
-from cosmo_cli.provider_common import BaseProviderClass
+from cloudify_cli.provider_common import BaseProviderClass
 from os.path import expanduser
 
 libcloud.security.VERIFY_SSL_CERT = False
 
 # initialize logger
-lgr, flgr = init_logger()
+#lgr, flgr = init_logger()
 
 CONFIG_FILE_NAME = 'cloudify-config.yaml'
 DEFAULTS_CONFIG_FILE_NAME = 'cloudify-config.defaults.yaml'

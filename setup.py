@@ -13,29 +13,27 @@
 #    * See the License for the specific language governing permissions and
 #    * limitations under the License.
 
-__author__ = 'adaml'
+__author__ = 'adaml, Roeland Kuipers'
 
 from setuptools import setup
 
-VERSION = '1.2'
+VERSION = '1.1a4'
 
 setup(
     name='cloudify-cloudstack-provider',
     version=VERSION,
-    author='adaml',
-    author_email='adaml@gigaspaces.com',
+    author='adaml,Roeland Kuipers',
+    author_email='adaml@gigaspaces.com, rkuipers@schubergphilis.com',
     packages=['cloudify_exoscale', 'cloudify_cloudstack'],
-    license='LICENSE',
+    license='Apache License 2.0',
     description='the cloudify cloudstack provider',
     package_data={'cloudify_exoscale': ['cloudify-config.yaml',
                                         'cloudify-config.defaults.yaml'],
                   'cloudify_cloudstack':['cloudify-config.yaml',
                                         'cloudify-config.defaults.yaml']},
     install_requires=[
-        "scp",
-        "jsonschema",
         "IPy==0.81",
         "apache-libcloud>=0.15.1",
-        'cloudify==3.0'
+        "cloudify==3.1a4"
     ],
 )

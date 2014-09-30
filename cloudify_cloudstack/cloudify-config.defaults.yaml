@@ -14,12 +14,12 @@ compute:
         user_on_management: root
         userhome_on_management: /root
         instance:
-            private_ip: 
             name: cloudify-management-server
-            image: f181fccb-62ea-4296-a0a0-e773a1391dc8
-            size: Medium
+            image: 8e6cb1ed-9c9a-4e5b-88f4-407437fd5eee 
+            size: employee-medium-ha
+            private_ip:
         management_keypair:
-            use_existing: false
+            use_existing: true
             name: cloudify-management-kp
 #            provided:
 #                public_key_filepath:
@@ -28,7 +28,7 @@ compute:
                 private_key_target_path: ~/.ssh/cloudify-management-kp.pem
     agent_servers:
         agents_keypair:
-            use_existing: false
+            use_existing: true
             name: cloudify-agents-kp
 #            provided:
 #                public_key_filepath:
@@ -46,7 +46,7 @@ networking:
         network_gateway: 10.10.1.1
         network_mask: 255.255.255.0
         network_zone: BETA-SBP-DC-1
-        network_domain: 'cloudify-mgmt.local'
+        network_domain: 'cloudify.local'
         protocol: TCP
         cidr: 0.0.0.0/0
         ports: [5555, 5672, 53229, 22, 8100, 80]
@@ -60,37 +60,67 @@ networking:
 # Cloudify Installation Configuration
 ##################################
 cloudify:
-   # You would probably want a prefix that ends with underscore or dash
-    resources_prefix: your_name_here
     server:
         packages:
-            components_package_url: http://gigaspaces-repository-eu.s3.amazonaws.com/org/cloudify3/3.0.0/nightly_6/cloudify-components_3.0.0-ga-b6_amd64.deb
-            core_package_url: http://gigaspaces-repository-eu.s3.amazonaws.com/org/cloudify3/3.0.0/nightly_6/cloudify-core_3.0.0-ga-b6_amd64.deb
-            ui_package_url: http://gigaspaces-repository-eu.s3.amazonaws.com/org/cloudify3/3.0.0/nightly_6/cloudify-ui_3.0.0-ga-b6_amd64.deb
+            components_package_url: http://gigaspaces-repository-eu.s3.amazonaws.com/org/cloudify3/3.1.0/m4-RELEASE/cloudify-components_3.1.0-m4-b81_amd64.deb
+            core_package_url: http://gigaspaces-repository-eu.s3.amazonaws.com/org/cloudify3/3.1.0/m4-RELEASE/cloudify-core_3.1.0-m4-b81_amd64.deb
+            ui_package_url: http://gigaspaces-repository-eu.s3.amazonaws.com/org/cloudify3/3.1.0/m4-RELEASE/cloudify-ui_3.1.0-m4-b81_amd64.deb
     agents:
         packages:
-            ubuntu_agent_url: http://gigaspaces-repository-eu.s3.amazonaws.com/org/cloudify3/3.0.0/nightly_6/cloudify-ubuntu-agent_3.0.0-ga-b6_amd64.deb
-            centos_agent_url: http://gigaspaces-repository-eu.s3.amazonaws.com/org/cloudify3/3.0.0/nightly_6/cloudify-centos-agent_3.0.0-ga-b6_amd64.deb
-            windows_agent_url: http://gigaspaces-repository-eu.s3.amazonaws.com/org/cloudify3/3.0.0/nightly_6/cloudify-windows-agent_3.0.0-ga-b6_amd64.deb
+            ubuntu_agent_url: http://gigaspaces-repository-eu.s3.amazonaws.com/org/cloudify3/3.1.0/m4-RELEASE/cloudify-ubuntu-agent_3.1.0-m4-b81_amd64.deb
+            centos_agent_url: http://gigaspaces-repository-eu.s3.amazonaws.com/org/cloudify3/3.1.0/m4-RELEASE/cloudify-centos-agent_3.1.0-m4-b81_amd64.deb
+            windows_agent_url: http://gigaspaces-repository-eu.s3.amazonaws.com/org/cloudify3/3.1.0/m4-RELEASE/cloudify-windows-agent_3.1.0-m4-b81_amd64.deb
         config:
-           min_workers: 2
-           max_workers: 5
-           remote_execution_port: 22
-           # user: Enter-Default-Image-User-Here-(Optional)
+            min_workers: 2
+            max_workers: 5
+            remote_execution_port: 22
+            #user: (no default - optional parameter)
     workflows:
-         task_retries: 10  # -1 means we retry forever
-         retry_interval: 30
+        task_retries: -1  # -1 means we retry forever
+        retry_interval: 30
+    policy_engine:
+        start_timeout: 30
     bootstrap:
-         ssh:
-           # number of retries for the initial connectivity check with the management server
-           initial_connectivity_retries: 25
-           # wait time (in seconds) in between the aforementioned retries
-           initial_connectivity_retries_interval: 5
-           # number of retries for bootstrap commands run via SSH
-           command_retries: 3
-           # wait time (in seconds) in between the aforementioned retries
-           retries_interval: 3
-           # number of SSH connection attempts (in a single retry)
-           connection_attempts: 3
-           # timeout (in seconds) for an SSH connection
-           socket_timeout: 10
+        ssh:
+            initial_connectivity_retries: 20
+            initial_connectivity_retries_interval: 15
+            command_retries: 3
+            retries_interval: 3
+            connection_attempts: 1
+            socket_timeout: 10
+
+#this section only applies to bootstrapping in --dev-mode
+dev:
+    #each section here is identified with one virtual environment
+    celery:
+        #which virtualenv dir does this apply to?
+        virtualenv: /opt/celery/cloudify.management__worker/env/
+        #which shell commands are run before the branches are deployed?
+        preruns:
+            - echo "Hi!"
+        downloads:
+            - https://github.com/cloudify-cosmo/cloudify-manager/archive/develop.tar.gz
+        #which branches will be applied to this virtualenv?
+        installs:
+            - /cloudify-manager-develop/plugins/agent-installer/
+            - /cloudify-manager-develop/plugins/plugin-installer/
+            - https://github.com/cloudify-cosmo/cloudify-plugins-common/archive/develop.tar.gz
+        #which shell commands are run after the branches are deployed?
+        runs:
+            - sudo /etc/init.d/celeryd-cloudify.management restart
+    manager:
+        virtualenv: /opt/manager
+        downloads:
+            - https://github.com/cloudify-cosmo/cloudify-manager/archive/develop.tar.gz
+        installs:
+            - /cloudify-manager-develop/rest-service/
+            - /cloudify-manager-develop/plugins/agent-installer/
+            - /cloudify-manager-develop/plugins/plugin-installer/
+        runs:
+            - sudo cp -R /tmp/opt/manager/cloudify-manager-develop/resources/rest-service/cloudify /opt/manager/resources  # for resources and workflow service
+            - sudo cp -R /tmp/opt/manager/cloudify-manager-develop/* /opt/manager/cloudify-manager-develop/  # for resources and workflow service
+            - sudo rm -rf /tmp/opt/manager/lib/python2.7/site-packages/rest-service
+            - sudo restart workflow
+            - sudo status workflow
+            - sudo restart manager
+            - sudo status manager
