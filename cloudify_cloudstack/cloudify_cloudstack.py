@@ -17,6 +17,8 @@
 __author__ = 'rkuipers'
 import os
 import shutil
+import socket
+import sys
 
 from copy import deepcopy
 from libcloud.compute.types import Provider
@@ -285,9 +287,15 @@ class ProviderManager(BaseProviderClass):
                                                        self.provider_config)
 
             #create required node topology
-            lgr.debug('creating the required resources for management vm')
-
+            lgr.info('Creating the VPC')
             vpc = network_creator.create_vpcs()
+            time.sleep(10)
+
+            # Check if the routervms is in running state
+            while not network_creator.get_routervm_state(
+                    vpc_id=vpc.id) == "Running":
+                lgr.info('Routervm is not started yet, waiting some more')
+                time.sleep(10)
 
             net = network_creator.create_networks(vpc.id)
             keypair_creator.create_key_pairs()
@@ -356,12 +364,13 @@ class ProviderManager(BaseProviderClass):
 
                 # Since were working with a VPC, we need to aquire a public IP
                 lgr.info('Aquire a public IP for VPC')
-                public_ip = cloud_driver.ex_allocate_public_ip(vpc_id=vpc.id)
-
+                public_ip = network_creator.create_public_ip(vpc=vpc)
                 lgr.info('Public IP aquired for VPC: {0}'.format(
                     public_ip.address))
 
-                lgr.debug('Creating port forwarding rules')
+                time.sleep(30)
+
+                lgr.info('Creating port forwarding rules')
 
                 #for each port, add forward rule
                 ingr_ports = mgmt_ingr_firewall_config['ports']
@@ -376,25 +385,6 @@ class ProviderManager(BaseProviderClass):
                                                           node,
                                                           net.id)
 
-                        # network_creator.create_firewall_rule(public_ip,
-                        #                                      cidr,
-                        #                                      protocol,
-                        #                                      port,
-                        #                                      port)
-
-                # Take care of egress firewall rules
-                # egr_protocol = mgmt_egr_firewall_config.get('protocol', None)
-                # egr_cidr = mgmt_egr_firewall_config.get('cidr', None)
-                #
-                # egr_ports = mgmt_egr_firewall_config['ports']
-                # for port in egr_ports:
-                #     network_creator.create_egress_firewall_rule(
-                #         mgmt_network_id,
-                #         egr_cidr,
-                #         egr_protocol,
-                #         port,
-                #         port)
-
             # Set Management IP to either private or Public
             if mgmt_server_config['use_private_ip']:
                 mgmt_ip = node.private_ips[0]
@@ -404,6 +394,14 @@ class ProviderManager(BaseProviderClass):
             lgr.debug(
                 'cloudstack -> zone_type must be either basic, '
                 'advanced or vpc')
+
+        # Since it takes a while for the port forwarding to be active...
+        lgr.info('Waiting for the port forwarding rules to work...')
+        attempt = 1
+        while not network_creator.check_readiness(public_ip, 22, 5):
+            lgr.info('Port forwarding not online yet, '
+                     'attempt: {0}'.format(str(attempt)))
+            attempt += 1
 
         provider_context = {"ip": str(mgmt_ip)}
         provider_context['mgmt_node_id'] = str(node.id)
@@ -886,9 +884,6 @@ class CloudstackNetworkCreator(object):
     def add_port_fwd_rule(self, ip_address, privateport,
                           publicport, protocol, node=None, network_id=None):
 
-        lgr.debug('creating network rule for {0} with details {1}'.
-                  format(ip_address, locals().values()))
-
         self.cloud_driver.ex_create_port_forwarding_rule(
             address=ip_address,
             private_port=privateport,
@@ -897,6 +892,22 @@ class CloudstackNetworkCreator(object):
             protocol=protocol,
             openfirewall=False,
             network_id=network_id)
+
+    def check_readiness(self, ip_address, port, timeout):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        except socket.error, msg:
+            print 'Failed to create socket. Error code: ' + str(msg[0]) + \
+                  ' , Error message : ' + msg[1]
+            sys.exit()
+        s.settimeout(timeout)
+        try:
+            s.connect((ip_address.address , port))
+            lgr.info('Connected to IP {0}'.format(ip_address.address))
+            return True
+        except socket.error:
+            lgr.info('Unable to connect to: {0}'.format(ip_address.address))
+            return False
 
     def create_firewall_rule(self, ip_address, cidr_list, protocol,
                              start_port, end_port):
@@ -991,6 +1002,25 @@ class CloudstackNetworkCreator(object):
                 return public_ip
         else:
             raise RuntimeError('No matching mgmt public ip found')
+
+    def create_public_ip(self, vpc):
+        management_netw_config = self.provider_config['networking'][
+            'management_network']
+        zone = management_netw_config['network_zone']
+        locations = self.cloud_driver.list_locations()
+
+        for location in locations:
+            if zone == location.name:
+                break
+            else:
+                raise RuntimeError('Specified location cannot be '
+                                   'found!')
+
+        public_ip = self.cloud_driver.ex_allocate_public_ip(
+            vpc_id=vpc.id, location=location)
+
+        return public_ip
+
 
     def get_mgmt_network_id(self):
         mgmt_net = self.provider_config['networking'][
@@ -1116,7 +1146,7 @@ class CloudstackNetworkCreator(object):
         management_netw_config = self.provider_config['networking'][
             'management_network']
 
-        management_netw_name = management_netw_config['name']
+        management_netw_name = 'VPC_' + management_netw_config['name']
         use_existing = management_netw_config['use_existing']
 
         if not self._vpc_exists(management_netw_name):
@@ -1160,6 +1190,14 @@ class CloudstackNetworkCreator(object):
             lgr.info('using existing management network {0}'.format(
                 management_netw_name))
             return self._vpc_exists(management_netw_name)
+
+    def get_routervm_state(self, vpc_id):
+        routers = [router for router in self.cloud_driver.
+                   ex_list_routers(vpc_id=vpc_id)]
+
+        if routers.__len__() == 0:
+            return None
+        return routers[0].state
 
 
 class CloudstackSecurityGroupComputeCreator(object):
